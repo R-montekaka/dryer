@@ -111,6 +111,24 @@ pub fn beta(items: Vec<i32>) -> Vec<i32> {
 }
 """
 
+SWIFT_LEFT = """\
+struct Board {
+    func alpha(xs: [Int]) -> [Int] {
+        let ys = filter(xs, odd)
+        return map(ys, inc)
+    }
+}
+"""
+
+SWIFT_RIGHT = """\
+extension Panel {
+    func beta(items: [Int]) -> [Int] {
+        let kept = filter(items, even)
+        return map(kept, dec)
+    }
+}
+"""
+
 
 def test_each_language_matches_renamed_locals(tmp_path):
     samples = {
@@ -126,6 +144,8 @@ def test_each_language_matches_renamed_locals(tmp_path):
         "right.tsx": TSX_RIGHT,
         "left.rs": RUST_LEFT,
         "right.rs": RUST_RIGHT,
+        "left.swift": SWIFT_LEFT,
+        "right.swift": SWIFT_RIGHT,
     }
     for name, source in samples.items():
         write_source(tmp_path, name, source)
@@ -133,7 +153,7 @@ def test_each_language_matches_renamed_locals(tmp_path):
     by_language = {}
     for item in found:
         by_language.setdefault(item.language, []).append(item)
-    assert set(by_language) == {"java", "go", "python", "typescript", "rust"}
+    assert set(by_language) == {"java", "go", "python", "typescript", "rust", "swift"}
     assert [(item.left.file, item.right.file) for item in by_language["typescript"]] == [
         ("left.ts", "right.ts"),
         ("left.tsx", "right.tsx"),
@@ -237,7 +257,14 @@ class Right {
 
 
 def _suffix(language: str) -> str:
-    return {"python": "py", "go": "go", "rust": "rs", "java": "java", "typescript": "ts"}[language]
+    return {
+        "python": "py",
+        "go": "go",
+        "rust": "rs",
+        "java": "java",
+        "typescript": "ts",
+        "swift": "swift",
+    }[language]
 
 
 def test_callee_names_stay_and_member_names_do_not(tmp_path):
@@ -308,6 +335,18 @@ export function beta(items: number[]): number {
   return foo<number>(items.baz);
 }
 """,
+        "left.swift": """\
+func alpha(xs: [Int]) -> Int {
+    let ys = xs.filter(odd)
+    return print(xs.total)
+}
+""",
+        "right.swift": """\
+func beta(items: [Int]) -> Int {
+    let kept = items.filter(even)
+    return print(items.count)
+}
+""",
     }
     for name, source in samples.items():
         write_source(tmp_path, name, source)
@@ -315,7 +354,7 @@ export function beta(items: number[]): number {
     by_language = {}
     for item in found:
         by_language.setdefault(item.language, []).append(item)
-    assert set(by_language) == {"python", "go", "rust", "java", "typescript"}
+    assert set(by_language) == {"python", "go", "rust", "java", "typescript", "swift"}
     for language, group in by_language.items():
         assert [(item.left.file, item.right.file, item.score) for item in group] == [
             (f"left.{_suffix(language)}", f"right.{_suffix(language)}", 1.0)
@@ -327,11 +366,13 @@ def test_a_different_callee_name_lowers_the_score(tmp_path):
     write_source(tmp_path, "b.py", "def beta(items):\n    return items.select(even)\n")
     write_source(tmp_path, "a.rs", "fn alpha() {\n    Vec::new()\n}\n")
     write_source(tmp_path, "b.rs", "fn beta() {\n    Vec::with_capacity(1)\n}\n")
+    write_source(tmp_path, "a.swift", "func alpha(xs: [Int]) {\n    xs.filter(odd)\n}\n")
+    write_source(tmp_path, "b.swift", "func beta(items: [Int]) {\n    items.select(even)\n}\n")
     files = sorted(path for path in tmp_path.rglob("*") if path.is_file())
     entries, warnings = scan_files(files, tmp_path, min_lines=1, min_nodes=1)
     assert warnings == []
     found = find_duplicates(entries, threshold=0.0)
-    assert len(found) == 2
+    assert len(found) == 3
     assert all(item.score < 1.0 for item in found)
 
 
@@ -369,6 +410,84 @@ def test_an_interpolated_string_is_not_a_plain_literal():
     found = find_duplicates(plain + interpolated, threshold=0.0)
     assert len(found) == 1
     assert found[0].score < 1.0
+
+
+def test_a_swift_interpolated_string_is_not_a_plain_literal():
+    plain = forms("swift", 'func alpha(xs: Int) -> String {\n    return "xs"\n}\n', "a.swift")
+    number = forms("swift", "func gamma(xs: Int) -> Double {\n    return 1.5\n}\n", "c.swift")
+    interpolated = forms(
+        "swift", 'func beta(items: Int) -> String {\n    return "\\(items)"\n}\n', "b.swift"
+    )
+    raw = forms(
+        "swift", 'func delta(items: Int) -> String {\n    return #"\\#(items)"#\n}\n', "d.swift"
+    )
+    assert find_duplicates(plain + number, threshold=0.0)[0].score == 1.0
+    assert find_duplicates(plain + interpolated, threshold=0.0)[0].score < 1.0
+    assert find_duplicates(plain + raw, threshold=0.0)[0].score < 1.0
+
+
+def test_swift_keeps_funcs_and_skips_the_rest():
+    assert spans(
+        "swift",
+        """\
+protocol Shape {
+    func area() -> Double
+}
+
+struct Cart {
+    var items: [Int] = [] {
+        willSet { func before() { } }
+        didSet { func after() { } }
+    }
+    init(items: [Int]) {
+        func setup() { }
+        self.items = items
+    }
+    var count: Int {
+        func inner() -> Int { 1 }
+        return items.count
+    }
+    subscript(i: Int) -> Int { items[i] }
+    func total() -> Int {
+        func helper() -> Int { 1 }
+        let add = { (a: Int) -> Int in a + helper() }
+        return add(1)
+    }
+}
+
+extension Cart {
+    func first() -> Int { items[0] }
+}
+
+let top = { (x: Int) -> Int in x }
+""",
+        "a.swift",
+    ) == [(19, 23), (27, 27)]
+
+
+def _swift_score(left: str, right: str) -> float:
+    a = forms("swift", f"func alpha() {{\n    let x = {left}\n}}\n", "a.swift")
+    b = forms("swift", f"func beta() {{\n    let x = {right}\n}}\n", "b.swift")
+    return find_duplicates(a + b, threshold=0.0)[0].score
+
+
+def test_swift_keeps_implicit_member_and_constructed_names():
+    assert _swift_score(".some(1)", ".none(1)") < 1.0
+    assert _swift_score(".init()", ".make()") < 1.0
+    assert _swift_score("Array<Int>()", "Set<Int>()") < 1.0
+    assert _swift_score("Array<Int>()", "Array<String>()") == 1.0
+    assert _swift_score("-a", "-b") == 1.0
+    assert _swift_score("-a", "!b") < 1.0
+
+
+def test_swift_number_bases_are_the_same_literal():
+    assert _swift_score("0xFF", "255") == 1.0
+    assert _swift_score("0o7", "0b1") == 1.0
+
+
+def test_spread_is_not_an_operator():
+    spread = forms("typescript", "function alpha(xs) {\n  return g(...xs);\n}\n", "a.ts")
+    assert '[:symbol "..."]' not in spread[0].fingerprints
 
 
 def test_constructed_names_stay_in_the_fingerprint():
@@ -610,3 +729,18 @@ def test_a_deep_expression_is_read():
     entries, warning = entries_in_source("clojure", f"(defn place [] {nested})\n", "app.clj", "app.clj")
     assert warning is None
     assert entries
+
+
+def test_swift_subscript_does_not_keep_the_local_name():
+    assert _swift_score("items[0]", "values[0]") == 1.0
+    assert _swift_score("f(0)", "g(0)") < 1.0
+
+
+def test_swift_argument_labels_are_part_of_the_name():
+    assert _swift_score("move(from: a)", "move(to: a)") < 1.0
+    assert _swift_score("move(from: a)", "move(from: b)") == 1.0
+
+
+def test_swift_optional_chaining_is_structure():
+    assert _swift_score("a?.b()", "a.b()") < 1.0
+    assert _swift_score("a?.b()", "c?.b()") == 1.0

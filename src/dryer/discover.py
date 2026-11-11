@@ -1,7 +1,8 @@
 """Find source files and decide which language each one is written in.
 
 The extensions and the skipped directories match crapper and mutator, with
-`.cljd` added because dry4clj reads it.
+`.cljd` added because dry4clj reads it. Swift is dryer's own: crapper and
+mutator do not read it yet.
 """
 
 import os
@@ -21,6 +22,7 @@ EXTENSIONS = {
     ".cts": "typescript",
     ".rs": "rust",
     ".py": "python",
+    ".swift": "swift",
 }
 
 SKIP_DIRS = {
@@ -41,6 +43,11 @@ SKIP_DIRS = {
     "testdata",
     "__pycache__",
     ".clj-kondo",
+    ".build",
+    ".swiftpm",
+    "Pods",
+    "Carthage",
+    "DerivedData",
 }
 
 TEST_DIRS = {"test", "tests", "spec", "specs", "__tests__"}
@@ -74,11 +81,23 @@ def is_test_file(path: str | Path) -> bool:
         )
     ):
         return True
+    if _swift_test(file_path):
+        return True
     if name == "conftest.py":
         return True
     if name.endswith("_test.py") or (name.startswith("test_") and name.endswith(".py")):
         return True
-    return any(part in TEST_DIRS for part in file_path.parts)
+    return any(part in TEST_DIRS for part in file_path.parent.parts)
+
+
+def _swift_test(path: Path) -> bool:
+    """Xcode and SwiftPM test targets end in `Tests`: `Tests`, `AppTests`, `AppUITests`."""
+
+    if path.suffix != ".swift":
+        return False
+    return path.name.endswith("Tests.swift") or any(
+        part.endswith("Tests") for part in path.parent.parts
+    )
 
 
 def _skipped_dir(name: str) -> bool:
@@ -95,7 +114,8 @@ def _walk(root: Path) -> list[Path]:
         dirnames[:] = [name for name in dirnames if not _skipped_dir(name)]
         for name in filenames:
             path = Path(dirpath) / name
-            if language_of(path) is None or is_test_file(path):
+            # Relative, so a test folder above the walked root does not count.
+            if language_of(path) is None or is_test_file(path.relative_to(root)):
                 continue
             found.append(path)
     return found

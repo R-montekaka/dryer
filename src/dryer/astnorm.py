@@ -28,6 +28,7 @@ _IDENTIFIERS = {
     "shorthand_property_identifier",
     "shorthand_property_identifier_pattern",
     "package_identifier",
+    "simple_identifier",
 }
 
 _LITERALS = {
@@ -62,6 +63,13 @@ _LITERALS = {
     "template_string",
     "regex",
     "regex_literal",
+    "real_literal",
+    "nil_literal",
+    "line_string_literal",
+    "multi_line_string_literal",
+    "hex_literal",
+    "oct_literal",
+    "bin_literal",
 }
 
 _OPERATORS = {
@@ -119,6 +127,7 @@ _CALLS = {
     "method_invocation",
     "object_creation_expression",
     "new_expression",
+    "constructor_expression",
 }
 
 _ATTRIBUTES = {
@@ -127,14 +136,19 @@ _ATTRIBUTES = {
     "selector_expression",
     "field_access",
     "field_expression",
+    "navigation_expression",
 }
 
-_SCOPED = {
+# A callee path keeps every name in it: `Vec::new`, `ArrayList<T>`, Swift `Array<T>`.
+_PATHS = {
     "scoped_identifier",
     "scoped_type_identifier",
+    "generic_type",
+    "user_type",
 }
 
-_ARG_LISTS = {"argument_list", "arguments"}
+_ARG_LISTS = {"argument_list", "arguments", "call_suffix", "constructor_suffix"}
+_INTERPOLATIONS = {"interpolation", "interpolated_expression", "raw_str_interpolation"}
 _TYPE_ARGS = {"type_arguments", "type_parameters"}
 
 _DATA: bytes = b""
@@ -158,9 +172,41 @@ _PENDING = object()
 def _is_literal(node) -> bool:
     if node.type not in _LITERALS:
         return False
-    if node.type == "string" and any(child.type == "interpolation" for child in node.children):
-        return False
-    return True
+    return not any(child.type in _INTERPOLATIONS for child in node.children)
+
+
+def _is_attr(node) -> bool:
+    """A member access. Swift `.some(x)` is one with the receiver left implicit."""
+
+    if node.type in _ATTRIBUTES:
+        return True
+    return node.type == "prefix_expression" and node.children[0].type == "."
+
+
+def _attr_parts(node):
+    """Receiver parts and member name. Swift's `?` in `a?.b` is unnamed but kept."""
+
+    parts = [child for child in node.children if child.is_named or child.type in _OPERATORS]
+    if not parts:
+        return [], None
+    *objects, name = parts
+    return objects, _member(name)
+
+
+def _member(node):
+    """Swift wraps the name in `a.b` as `navigation_suffix(".", b)`."""
+
+    if node.type == "navigation_suffix" and node.named_children:
+        return node.named_children[-1]
+    return node
+
+
+def _callee_mode(args) -> str:
+    """Swift `items[0]` is a subscript, so `items` is a local, not a callee."""
+
+    if args is not None and _text(args).startswith("["):
+        return "norm"
+    return "callee"
 
 
 def _named_before_args(node):
@@ -185,6 +231,8 @@ def _callee_leaf(node):
 
 
 def _named_leaf(node, head: bool):
+    if node.type == "value_argument_label":
+        return [K(node.type), _text(node)]
     if node.type in _IDENTIFIERS:
         if head:
             return [K("symbol"), _text(node)]
@@ -215,7 +263,7 @@ def _call_jobs(node):
     if rest:
         *receivers, callee = rest
         jobs.extend((child, "norm", False) for child in receivers)
-        jobs.append((callee, "callee", False))
+        jobs.append((callee, _callee_mode(args), False))
     jobs.extend((child, "norm", False) for child in type_args)
     if args is not None:
         jobs.append((args, "norm", False))
@@ -223,10 +271,9 @@ def _call_jobs(node):
 
 
 def _attr_jobs(node, head: bool):
-    named = list(node.named_children)
-    if not named:
+    objects, name = _attr_parts(node)
+    if name is None:
         return []
-    *objects, name = named
     jobs = [(obj, "norm", False) for obj in objects]
     if name.type in _IDENTIFIERS:
         return jobs
@@ -242,7 +289,7 @@ def _path_jobs(node):
     for child in node.named_children:
         if child.type in _IDENTIFIERS:
             continue
-        if child.type in _SCOPED or child.type == "generic_type":
+        if child.type in _PATHS:
             jobs.append((child, "path", False))
         else:
             jobs.append((child, "norm", False))
@@ -250,9 +297,9 @@ def _path_jobs(node):
 
 
 def _callee_jobs(node):
-    if node.type in _ATTRIBUTES:
+    if _is_attr(node):
         return _attr_jobs(node, True)
-    if node.type in _SCOPED or node.type == "generic_type":
+    if node.type in _PATHS:
         return _path_jobs(node)
     return [(node, "norm", True)]
 
@@ -266,7 +313,7 @@ def _jobs(node, mode: str, head: bool):
         return [(node.named_children[0], "norm", head)]
     if node.type in _CALLS:
         return _call_jobs(node)
-    if node.type in _ATTRIBUTES:
+    if _is_attr(node):
         return _attr_jobs(node, head)
     return [(child, "norm", False) for child in node.children]
 
@@ -293,7 +340,7 @@ def _assemble_call(node, cache):
             norm = cache[(id(child), "norm", False)]
             if norm is not None:
                 out.append(norm)
-        out.append(cache[(id(callee), "callee", False)])
+        out.append(cache[(id(callee), _callee_mode(args), False)])
     for child in type_args:
         norm = cache[(id(child), "norm", False)]
         if norm is not None:
@@ -306,10 +353,9 @@ def _assemble_call(node, cache):
 
 
 def _assemble_attr(node, head: bool, cache):
-    named = list(node.named_children)
-    if not named:
+    objects, name = _attr_parts(node)
+    if name is None:
         return [K(node.type)]
-    *objects, name = named
     parts = [K(node.type)]
     for obj in objects:
         norm = cache[(id(obj), "norm", False)]
@@ -328,7 +374,7 @@ def _assemble_path(node, cache):
     for child in node.named_children:
         if child.type in _IDENTIFIERS:
             parts.append([K("symbol"), _text(child)])
-        elif child.type in _SCOPED or child.type == "generic_type":
+        elif child.type in _PATHS:
             parts.append(cache[(id(child), "path", False)])
         else:
             norm = cache[(id(child), "norm", False)]
@@ -338,9 +384,9 @@ def _assemble_path(node, cache):
 
 
 def _callee_value(node, cache):
-    if node.type in _ATTRIBUTES:
+    if _is_attr(node):
         return _assemble_attr(node, True, cache)
-    if node.type in _SCOPED or node.type == "generic_type":
+    if node.type in _PATHS:
         return _assemble_path(node, cache)
     return cache[(id(node), "norm", True)]
 
@@ -364,7 +410,7 @@ def _assemble(node, mode: str, head: bool, cache):
         return cache[(id(child), "norm", head)]
     if node.type in _CALLS:
         return _assemble_call(node, cache)
-    if node.type in _ATTRIBUTES:
+    if _is_attr(node):
         return _assemble_attr(node, head, cache)
     return _assemble_children(node, cache)
 

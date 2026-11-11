@@ -30,6 +30,7 @@ def test_language_detection():
     assert language_of("ui/view.tsx") == "typescript"
     assert language_of("src/lib.rs") == "rust"
     assert language_of("src/dryer/cli.py") == "python"
+    assert language_of("Sources/App/Cart.swift") == "swift"
     assert language_of("types.d.ts") is None
     assert language_of("notes.md") is None
 
@@ -171,10 +172,17 @@ def test_names_that_are_tests():
         "pkg/foo_test.py",
         "pkg/test_foo.py",
         "tests/app.py",
+        "AppTests/CartTests.swift",
+        "MyAppTests/Mocks/MockAPI.swift",
+        "MyAppUITests/Flows.swift",
+        "Tests/AppTests/Cart.swift",
     ]
     for name in names:
         assert is_test_file(name), name
     assert not is_test_file("src/app.py")
+    assert not is_test_file("Sources/App/Cart.swift")
+    assert not is_test_file("Sources/App/ABTest.swift")
+    assert not is_test_file("Sources/Contests/Board.swift")
 
 
 def _init_repo(path: Path) -> None:
@@ -338,8 +346,21 @@ def test_test_files_and_skipped_directories_are_left_out(tmp_path):
     write_source(tmp_path, "src/app.test.cts", "export {}\n")
     write_source(tmp_path, "src/app.spec.cts", "export {}\n")
     write_source(tmp_path, "src/widget.cts", "export {}\n")
+    for skipped in [".build", ".swiftpm", "Pods", "Carthage", "DerivedData", "Tests", "AppUITests"]:
+        write_source(tmp_path, f"{skipped}/Lib.swift", "func f() {}\n")
+    write_source(tmp_path, "Sources/App/Cart.swift", "func f() {}\n")
     relative = [path.relative_to(tmp_path).as_posix() for path in iter_source_files([tmp_path])]
-    assert sorted(relative) == ["src/app.py", "src/widget.cts"]
+    assert sorted(relative) == ["Sources/App/Cart.swift", "src/app.py", "src/widget.cts"]
+
+
+def test_a_project_under_a_test_folder_still_has_sources(tmp_path):
+    project = tmp_path / "Tests" / "tests" / "proj"
+    write_source(project, "Sources/a.swift", "func f() {}\n")
+    write_source(project, "Tests/b.swift", "func f() {}\n")
+    found = [path.relative_to(project).as_posix() for path in iter_source_files([project])]
+    assert found == ["Sources/a.swift"]
+    assert _tracked_source(project / "Sources" / "a.swift", project) is True
+    assert _tracked_source(project / "Tests" / "b.swift", project) is False
 
 
 def test_a_second_report_replaces_the_snapshot(tmp_path, capsys):
@@ -348,3 +369,13 @@ def test_a_second_report_replaces_the_snapshot(tmp_path, capsys):
     assert run(args) == 0
     assert run(args) == 0
     assert (tmp_path / ".metrics" / "dry.edn").read_text(encoding="utf-8") == "{:candidates []}\n"
+
+
+def test_only_swift_skips_folders_ending_in_tests(tmp_path):
+    assert is_test_file("AppTests/Cart.swift")
+    assert not is_test_file("SplitTests/split.go")
+    assert not is_test_file("LoadTests/load.py")
+    for name in ["SplitTests/split.go", "LoadTests/load.py", "AppTests/Cart.swift"]:
+        write_source(tmp_path, name, "x\n")
+    found = [path.relative_to(tmp_path).as_posix() for path in iter_source_files([tmp_path])]
+    assert found == ["LoadTests/load.py", "SplitTests/split.go"]

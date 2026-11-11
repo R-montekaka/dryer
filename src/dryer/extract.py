@@ -3,7 +3,9 @@
 Clojure compares every top-level list except `ns`, matching dry4clj. The other
 languages compare the functions and methods crapper scores: bodies, not
 signatures alone, and not callbacks nested inside another function. Rust
-functions inside `mod tests` are test code and are skipped.
+functions inside `mod tests` are test code and are skipped. Swift compares
+`func` bodies only, as Java skips constructors: not `init`, `deinit`,
+accessors, subscripts, or closures.
 """
 
 from __future__ import annotations
@@ -20,6 +22,15 @@ _TS_FUNCTION = {
     "method_definition",
     "arrow_function",
     "function_expression",
+}
+_SWIFT_EXECUTABLE = {
+    "function_declaration",
+    "init_declaration",
+    "deinit_declaration",
+    "lambda_literal",
+    "computed_property",
+    "willset_didset_block",
+    "subscript_declaration",
 }
 _DEFINITION_PARENTS = {
     "variable_declarator",
@@ -143,12 +154,23 @@ def _rust_nodes(data: bytes, root) -> list:
     return found
 
 
+def _swift_nodes(data: bytes, root) -> list:
+    found = []
+    for node in descendants(root):
+        if node.type != "function_declaration" or not _has(node, "function_body"):
+            continue
+        if not _inside(node, _SWIFT_EXECUTABLE):
+            found.append(node)
+    return found
+
+
 _PICKERS = {
     "java": ("java", _java_nodes),
     "go": ("go", _go_nodes),
     "python": ("python", _python_nodes),
     "typescript": (_grammar, _typescript_nodes),
     "rust": ("rust", _rust_nodes),
+    "swift": ("swift", _swift_nodes),
 }
 
 
