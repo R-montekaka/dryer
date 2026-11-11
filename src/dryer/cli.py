@@ -58,7 +58,8 @@ Arguments:
 With no paths, source files under the project root are compared. Directories
 named {_skipped_directory_text()} are skipped, as are Swift files under a
 directory ending in Tests, and *_test.go, *.test.cts, *.spec.cts, *.spec.ts,
-test_*.py, *_test.py, and *Tests.swift files.
+test_*.py, *_test.py, and *Tests.swift files. Generated files, marked
+@generated or "Code generated" in their first five lines, are always skipped.
 
 Clojure compares every top-level form except ns. The other languages compare
 functions and methods. A form is only compared with forms in the same language.

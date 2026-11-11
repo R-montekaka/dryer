@@ -23,6 +23,17 @@ def _keep(entry: Entry, min_lines: int, min_nodes: int) -> bool:
     return lines >= min_lines and entry.nodes >= min_nodes
 
 
+# `@generated` is the common marker (Apollo, SwiftGen, Thrift); Go uses `Code generated ... DO NOT EDIT.`
+_GENERATED_MARKERS = ("@generated", "Code generated")
+
+
+def is_generated(source: str) -> bool:
+    """Generated code repeats by design, so its header keeps it out of the comparison."""
+
+    header = "\n".join(source.splitlines()[:5])
+    return any(marker in header for marker in _GENERATED_MARKERS)
+
+
 def scan_files(
     files: list[Path], root: Path, min_lines: int, min_nodes: int
 ) -> tuple[list[Entry], list[str]]:
@@ -33,6 +44,8 @@ def scan_files(
         if language is None:
             continue
         source = path.read_text(encoding="utf-8", errors="replace")
+        if is_generated(source):
+            continue
         file = display_path(path, root)
         found, warning = entries_in_source(language, source, path.as_posix(), file)
         if warning:
