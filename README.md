@@ -1,8 +1,8 @@
 # dryer
 
-dryer finds candidate duplicate code in Clojure, Java, Go, TypeScript, Rust, and Python. One run detects the language of each source file, normalizes that language's forms, and reports pairs whose structure is close enough to review.
+dryer finds candidate duplicate code in Clojure, Java, Go, TypeScript, Rust, Python, and Swift. One run detects the language of each source file, normalizes that language's forms, and reports pairs whose structure is close enough to review.
 
-Clojure follows [dry4clj](https://github.com/unclebob/dry4clj). The other languages use the same idea on the functions and methods [crapper](https://github.com/unclebob/crapper) and [mutator](https://github.com/unclebob/mutator) already treat as one unit. A form is only compared with forms written in the same language.
+Clojure follows [dry4clj](https://github.com/unclebob/dry4clj). The other languages use the same idea on the functions and methods [crapper](https://github.com/unclebob/crapper) and [mutator](https://github.com/unclebob/mutator) already treat as one unit. Swift is dryer's own; crapper and mutator do not read it yet. A form is only compared with forms written in the same language.
 
 The score is Jaccard similarity of structural fingerprints:
 
@@ -47,7 +47,7 @@ What stays is the call or method name, the operator, and the shape of the tree. 
 ./dryer
 ```
 
-The first run creates `.venv` and installs the tool. From a project root it walks the tree, skips `test`, `spec`, `vendor`, `node_modules`, and `target`, and writes two results:
+The first run creates `.venv` and installs the tool. From a project root it walks the tree, skips `test`, `spec`, `vendor`, `node_modules`, `target`, `.build`, `.swiftpm`, `Pods`, `Carthage`, `DerivedData`, and, for Swift files, any directory ending in `Tests` (`Tests`, `AppTests`, `AppUITests`), and any generated file (`@generated` or `Code generated` in its first five lines), and writes two results:
 
 - a report on stdout, closest match first
 - `.metrics/dry.edn`, replaced on every successful analysis
@@ -101,6 +101,7 @@ DUPLICATE score=0.89
 | TypeScript | functions, methods, and top-level arrow functions | callbacks nested inside another function |
 | Rust | functions and methods with a body | functions inside `mod tests`, and closures |
 | Python | functions and methods | functions nested inside another function |
+| Swift | `func` declarations with a body (top-level functions and methods in types and extensions) and computed properties, including SwiftUI's `var body` | `init`, `deinit`, `willSet`/`didSet`, subscripts, closures, and functions nested inside another function |
 
 Clojure reader conditionals keep the `:clj` branch, as dry4clj does. Syntax-quote is kept as a `syntax-quote` form rather than expanded.
 

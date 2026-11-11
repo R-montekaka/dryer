@@ -21,16 +21,17 @@ def _skipped_directory_text() -> str:
 HELP = f"""\
 Usage: dryer [options] [path-or-filter ...]
 
-Find candidate duplicate code in Clojure, Java, Go, TypeScript, Rust, and
-Python. Each form is normalized — call and method names, operators, and
-tree shape stay; local names, field names, and literals do not — and compared
-with the other forms of the same language. The score is Jaccard similarity of
-those structural fingerprints, the same score as dry4clj.
+Find candidate duplicate code in Clojure, Java, Go, TypeScript, Rust,
+Python, and Swift. Each form is normalized — call and method names,
+operators, and tree shape stay; local names, field names, and literals do
+not — and compared with the other forms of the same language. The score
+is Jaccard similarity of those structural fingerprints, the same score as
+dry4clj.
 
 Prints a report and writes .metrics/dry.edn.
 
 Languages: Clojure (.clj .cljc .cljs .cljd .bb), Java (.java), Go (.go),
-TypeScript (.ts .tsx .mts .cts), Rust (.rs), Python (.py).
+TypeScript (.ts .tsx .mts .cts), Rust (.rs), Python (.py), Swift (.swift).
 
 Options:
   -h, --help                    Print this help and exit.
@@ -55,8 +56,10 @@ Arguments:
                     path contains this text are compared.
 
 With no paths, source files under the project root are compared. Directories
-named {_skipped_directory_text()} are skipped, as are *_test.go, *.test.cts,
-*.spec.cts, *.spec.ts, test_*.py, and *_test.py files.
+named {_skipped_directory_text()} are skipped, as are Swift files under a
+directory ending in Tests, and *_test.go, *.test.cts, *.spec.cts, *.spec.ts,
+test_*.py, *_test.py, and *Tests.swift files. Generated files, marked
+@generated or "Code generated" in their first five lines, are always skipped.
 
 Clojure compares every top-level form except ns. The other languages compare
 functions and methods. A form is only compared with forms in the same language.
@@ -243,7 +246,7 @@ def _tracked_source(path: Path, root: Path | None = None) -> bool:
         return False
     if language_of(path) is None:
         return False
-    return not is_test_file(path)
+    return not is_test_file(Path(*parts))
 
 
 def _changed_source(root: Path) -> list[Path]:
